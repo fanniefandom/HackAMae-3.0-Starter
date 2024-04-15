@@ -1,9 +1,9 @@
 {
   "Parameters": {
-    "VPC": "vpc-03ab89c3100a1efe2",
-    "Subnet1": "subnet-06f41aea7af1974df",
-    "Subnet2": "subnet-0052c785b28c1d501",
-    "SecurityGroup": "sg-0765a5e84eff3fd74",
+    "VPC": "vpc-051f26b77144b3a93",
+    "Subnet1": "subnet-0b21d62d73eb66a6f",
+    "Subnet2": "subnet-0db8661b606f44f07",
+    "SecurityGroup": "sg-06fc16c011dbb5d81",
     "TeamNumber": "4",
     "AMI" : "ami-0a699202e5027c10d"
   }
