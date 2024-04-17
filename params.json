@@ -5,6 +5,6 @@
     "Subnet2": "subnet-0db8661b606f44f07",
     "SecurityGroup": "sg-06fc16c011dbb5d81",
     "TeamNumber": "4",
-    "AMI" : "ami-0a699202e5027c10d"
+    "AMI" : "ami-07761f3ae34c4478d"
   }
 }
