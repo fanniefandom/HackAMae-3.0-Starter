@@ -1,0 +1,67 @@
+import boto3
+import pprint
+import datetime
+import json
+
+
+def lambda_handler(event, context):
+
+    list_all_EC2()
+
+def list_all_EC2():
+     # Initialize SNS client
+    sns_client = boto3.client('sns')
+
+    # Specify your SNS topic ARN
+    topic_arn = 'arn:aws:sns:us-east-1:940505577336:StandaloneEC2s' 
+    
+    #Lists all EC2 instances in the current region."""
+    ec2 = boto3.client('ec2')
+    
+    s3 = boto3.client('s3')
+    bucket_name = 'ami-us-east-1-426514941654'
+    file_key = 'latest_ami_id.txt'
+    response = s3.get_object(Bucket=bucket_name, Key=file_key)
+    new_ami_id = response['Body'].read().decode('utf-8')
+    print(new_ami_id)    
+    
+    outLine=""
+    response = ec2.describe_instances()
+    reservations = response['Reservations']
+    for reservation in reservations:
+        for instance in reservation['Instances']:
+            print (instance['InstanceId'])
+            existing_ami_id = instance['ImageId']
+            if new_ami_id != existing_ami_id:
+                print("AMIs are not equal")
+                if is_instance_in_autoscaling_group(instance['InstanceId']) == False:
+                    # Message you want to publish
+                    message = {
+                        "instance_id": instance['InstanceId'],
+                        "image_id": new_ami_id
+                    }
+                    message_json = json.dumps(message)
+                    print(message_json)
+                    # Publish the message to SNS
+                    response = sns_client.publish(
+                        TopicArn=topic_arn,
+                        Message=message_json
+                    )
+                    print(response)
+                    
+                
+def is_instance_in_autoscaling_group(instance_id):
+    # Initialize the Auto Scaling client
+    autoscaling_client = boto3.client('autoscaling')
+
+    # Describe Auto Scaling Groups
+    response = autoscaling_client.describe_auto_scaling_groups()
+
+    # Check if the instance is part of any Auto Scaling Group
+    for group in response['AutoScalingGroups']:
+        for instance in group['Instances']:
+            if instance['InstanceId'] == instance_id:
+                return True
+
+    return False
+

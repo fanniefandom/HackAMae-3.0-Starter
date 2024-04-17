@@ -1,0 +1,45 @@
+import json
+import boto3
+
+def lambda_handler(event, context):
+    # TODO implement
+    
+    # Initialize SNS client
+    sns_client = boto3.client('sns')
+
+    # Specify your SNS topic ARN
+    topic_arn = 'arn:aws:sns:us-east-1:940505577336:ASGs' 
+    
+    s3 = boto3.client('s3')
+    
+    bucket_name = 'ami-us-east-1-426514941654'
+    file_key = 'latest_ami_id.txt'
+    response = s3.get_object(Bucket=bucket_name, Key=file_key)
+    new_ami_id = response['Body'].read().decode('utf-8')
+    print("new AMI id: ", new_ami_id)
+    
+    # Initialize the Auto Scaling client
+    autoscaling_client = boto3.client('autoscaling')
+
+    # Describe Auto Scaling Groups
+    response = autoscaling_client.describe_auto_scaling_groups()
+
+    # Check if the instance is part of any Auto Scaling Group
+    for group in response['AutoScalingGroups']:
+        print ('ASG Name :' + group['AutoScalingGroupName'])
+        
+        # Message you want to publish
+        message = {
+            "asg_name": group['AutoScalingGroupName'],
+            "image_id": new_ami_id
+        }
+        message_json = json.dumps(message)
+        print(message_json)
+        # Publish the message to SNS
+        response = sns_client.publish(
+            TopicArn=topic_arn,
+            Message=message_json
+        )
+        print(response)
+
+    

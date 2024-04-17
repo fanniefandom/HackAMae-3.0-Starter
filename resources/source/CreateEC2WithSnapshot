@@ -1,0 +1,201 @@
+import boto3
+import json
+
+def lambda_handler(event, context):
+    print("Received event: " + json.dumps(event))
+
+    # Iterate over each record (SNS can send multiple records if batched)
+    for record in event['Records']:
+        # Each record wraps an SNS message
+        sns_message = record['Sns']
+
+        # Print SNS message details
+        print("SNS Message: ", json.dumps(sns_message))
+
+        # Access the SNS message body and parse it
+        message_body = sns_message['Message']
+        print("Message Body: ", message_body)
+
+        # Assuming the message body is a serialized JSON string
+        message_data = json.loads(message_body)
+        print("Parsed Message Data: ", message_data)
+
+        # Example of accessing a field from the JSON message
+        instance_id=''
+        if 'instance_id' in message_data:
+            instance_id = message_data['instance_id']
+            print("Value for Instance Id: ", instance_id)
+        image_id=''
+        if 'image_id' in message_data:
+            image_id = message_data['image_id']
+            print("Value for Image : ", image_id)
+
+    create_new_instances(instance_id,image_id)
+
+def create_new_instances(instance_id,image_id):
+    # Initialize the EC2 client
+    ec2 = boto3.client('ec2')
+    
+    old_ec2_instance = instance_id
+    print("Old EC2 Instance: ", old_ec2_instance)   
+    
+    new_ami_id = image_id
+    print("new AMI id: ", new_ami_id)
+    
+    # Describe instances
+    response_desc = ec2.describe_instances(InstanceIds=[old_ec2_instance])
+
+
+    instances_data = []
+
+    # Extract instance information from the response
+    for reservation in response_desc['Reservations']:
+        for instance in reservation['Instances']:
+            instance_data = {}
+
+            # Extract relevant instance details
+            instance_data['Instance ID'] = instance['InstanceId']
+            old_instance_id = instance['InstanceId']
+            instance_data['AMI ID'] = instance['ImageId']
+            instance_data['AMI ID'] = instance['InstanceType']
+            instance_data['VPC ID'] = instance['VpcId']
+            instance_data['Subnets'] = instance['SubnetId']
+            #instance_data['Volume ID'] = instance.get('BlockDeviceMappings', [{}])[0].get('Ebs', {}).get('VolumeId', '')
+            volume_ids = []
+            for block_device_mapping in instance.get('BlockDeviceMappings', []):
+                volume_id = block_device_mapping.get('Ebs', {}).get('VolumeId', '')
+                volume_ids.append(volume_id)
+            instance_data['Volume IDs'] = volume_ids
+            instance_data['Security Groups'] = [group['GroupId'] for group in instance['SecurityGroups']]
+            instance_data['User Data'] = instance.get('UserData', '')
+            instance_data['Custom Tags'] = instance.get('Tags', [])
+            instance_data['Instance Role'] = instance.get('IamInstanceProfile', {}).get('Arn', '')
+            instance_data['Instance Type'] = instance['InstanceType']
+            instance_data['Architecture'] = instance['Architecture']
+            instance_data['Memory'] = instance.get('Memory', '')
+            instance_data['EBS Volume Size'] = instance.get('BlockDeviceMappings', [{}])[0].get('Ebs', {}).get('VolumeSize', '')
+
+            # Check for EFS
+            for tag in instance_data['Custom Tags']:
+                if tag['Key'] == 'aws:elasticfilesystem:file-system-id':
+                    instance_data['EFS'] = tag['Value']
+                    break
+            else:
+                instance_data['EFS'] = None
+
+            for tag in instance['Tags']:
+                if tag['Key'] == 'Name':
+                    instance_data['Instance Name'] = tag['Value']
+                    break
+
+            
+            
+            new_instance_id , az = create_new_instance(instance_data)
+
+            for volume in instance['BlockDeviceMappings']:
+                #volume_ids.append(volume['Ebs']['VolumeId'])
+                #device_ids.append(volume['DeviceName'])
+                snapshot_id = create_snapshot(volume['Ebs']['VolumeId'],az,'us-east-1')
+                detach_volume(volume['Ebs']['VolumeId'],new_instance_id,volume['DeviceName'])
+                attach_snapshot(volume['DeviceName'] , snapshot_id , new_instance_id,'us-east-1')
+            #terminate_instance(old_ec2_instance,'us-east-1')
+    
+def create_new_instance(instance_data):
+
+    s3 = boto3.client('s3')
+    
+    bucket_name = 'ami-us-east-1-426514941654'
+    file_key = 'latest_ami_id.txt'
+    response = s3.get_object(Bucket=bucket_name, Key=file_key)
+    new_ami_id = response['Body'].read().decode('utf-8')
+    print("new AMI id: ", new_ami_id)
+    
+
+    #aws ec2 run-instances --image-id new_ami_id --instance-type instance_data['Instance Type'] --vpc-id instance_data['VPC ID'] --subnet-id instance_data['Subnets'] --security-group-ids instance_data['Security Groups']
+    ec2 = boto3.client('ec2')
+    
+    tags = [
+        {'Key': 'Name', 'Value': instance_data['Instance Name']}, 
+    ]
+    response = ec2.run_instances(
+        ImageId=new_ami_id,
+        InstanceType=instance_data['Instance Type'],
+        MinCount=1,
+        MaxCount=1,
+        NetworkInterfaces=[
+            {
+                'DeviceIndex': 0,
+                'SubnetId': instance_data['Subnets'],
+                'Groups': instance_data['Security Groups']
+            }
+        ],
+        TagSpecifications=[
+            {
+                'ResourceType': 'instance',
+                'Tags': tags
+            },
+        ]
+        
+    )
+
+    instance_id = response['Instances'][0]['InstanceId']
+    availability_zone = response['Instances'][0]['Placement']['AvailabilityZone']
+    print("New instance ID:", instance_id)
+    print("AZ:", availability_zone)
+    waiter = ec2.get_waiter('instance_running')
+    waiter.wait(InstanceIds=[instance_id])
+    return instance_id , availability_zone
+    
+def create_snapshot(volume_id,az, region) :
+    #ec2_client = boto3.client('ec2', region_name=region)
+    ec2_client = boto3.client('ec2')
+    # Create snapshots of the volumes
+    response = ec2_client.create_snapshot(VolumeId=volume_id)
+    print ('Snapshot Id :' + response['SnapshotId'])
+    waiter = ec2_client.get_waiter('snapshot_completed')
+    waiter.wait(SnapshotIds=[response['SnapshotId']])
+    
+    response2 = ec2_client.create_volume(
+        AvailabilityZone=az,
+        SnapshotId=response['SnapshotId'])
+    print('Volume ID ' + response2['VolumeId'])
+    waiter = ec2_client.get_waiter('volume_available')
+    waiter.wait(VolumeIds=[response2['VolumeId']])
+    return response2['VolumeId']
+    
+def attach_snapshot(device_id , volume_id , instance_id,region) :
+    #client = boto3.client('ec2', region_name=region)
+    client = boto3.client('ec2')
+   
+    response= client.attach_volume(Device=device_id,
+            InstanceId=instance_id,
+            VolumeId=volume_id
+            )
+
+
+
+def detach_volume(volume_id, instance_id=None, device=None):
+    # Create an EC2 client
+    ec2 = boto3.client('ec2')
+
+    try:
+        # Detach the volume
+        if instance_id and device:
+            response = ec2.detach_volume(VolumeId=volume_id, InstanceId=instance_id, Device=device)
+        else:
+            response = ec2.detach_volume(VolumeId=volume_id)
+
+        print(f"Detach request sent. Status: {response['ResponseMetadata']['HTTPStatusCode']}")
+        print(f"Detach state: {response['State']}")
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+
+def terminate_instance(instance_id, region):
+    # Initialize EC2 client for the specified region
+    ec2_client = boto3.client('ec2', region_name=region)
+
+    # Terminate the instance
+    ec2_client.terminate_instances(InstanceIds=[instance_id])
+

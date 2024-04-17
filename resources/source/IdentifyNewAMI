@@ -1,0 +1,100 @@
+import boto3
+
+def lambda_handler(event, context):
+    
+    #list_images()
+    latest_amazon_ami = get_latest_amazon_linux_ami()
+    
+    if latest_amazon_ami:
+        # If AMI ID is found, print it
+        #rint("Latest Amazon Linux AMI ID:", latest_amazon_ami_id)
+        print("Name:", latest_amazon_ami['ImageId'])
+        print("Name:", latest_amazon_ami['Name'])
+        print("Owner ID:", latest_amazon_ami['OwnerId'])
+        write_to_s3(latest_amazon_ami['ImageId'])
+        
+    else:
+        # If AMI ID is not found, print a message
+        print("No Amazon Linux AMI found.")
+
+
+def get_latest_amazon_linux_ami():
+    # Initialize Boto3 client for EC2
+    ec2_client = boto3.client('ec2', region_name='us-east-1')  # Specify your desired region
+
+    # Filter for Amazon Linux AMIs
+    filters = [
+        {'Name': 'name', 'Values': ['*x86_64-gp2*']}
+    ]
+
+    # Get the latest Amazon Linux AMI
+    response = ec2_client.describe_images(Filters=filters, Owners=['amazon'], MaxResults=1000)
+
+    # Check if response contains images
+    if 'Images' in response and response['Images']:
+        # Extract the latest AMI ID
+        latest_ami = response['Images'][0]
+        return latest_ami
+    else:
+        return None
+        
+def get_amazon_linux_2023_arm_ami():
+    # Initialize Boto3 client for EC2
+    ec2_client = boto3.client('ec2', region_name='us-east-1')  # Specify your desired region
+
+    # Filter for Amazon Linux 2023 AMI (ARM)
+    filters = [
+        {'Name': 'name', 'Values': ['amzn2-ami-arm64-2023*']},
+        {'Name': 'architecture', 'Values': ['arm64']}
+    ]
+
+    # Get the latest Amazon Linux 2023 AMI (ARM)
+    response = ec2_client.describe_images(Filters=filters, Owners=['amazon'], MaxResults=10)
+
+    # Check if response contains images
+    if 'Images' in response and response['Images']:
+        # Extract the latest AMI ID
+        latest_ami_id = response['Images'][0]['ImageId']
+        return latest_ami_id
+    else:
+        return None
+        
+def get_latest_ubuntu_ami():
+    # Initialize Boto3 client for EC2
+    ec2_client = boto3.client('ec2', region_name='us-east-1')  # Specify your desired region
+
+    # Filter for Ubuntu AMIs
+    filters = [
+        {'Name': 'name', 'Values': ['ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*']}
+    ]
+
+    # Get the latest Ubuntu AMI
+    response = ec2_client.describe_images(Filters=filters, Owners=['099720109477'], MaxResults=10)  # Update the owner ID for Ubuntu
+
+    # Check if response contains images
+    if 'Images' in response and response['Images']:
+        # Extract the latest AMI ID
+        latest_ami_id = response['Images'][0]['ImageId']
+        return latest_ami_id
+    else:
+        return None
+        
+
+        
+def write_to_s3(data):
+    """
+    Writes data to a specified key in an S3 bucket.
+
+    Parameters:
+    - bucket_name (str): The name of the S3 bucket.
+    - key (str): The key (path) in the S3 bucket where the data will be written.
+    - data (str): The data to be written to the S3 bucket.
+    """
+    s3_client = boto3.client('s3')
+    bucket_name = 'ami-us-east-1-426514941654'
+    key = 'latest_ami_id.txt'
+    try:
+        s3_client.put_object(Bucket=bucket_name, Key=key, Body=data)
+        print(f"Data successfully written to S3 bucket {bucket_name} at key {key}")
+    except Exception as e:
+        print("Error:", e)

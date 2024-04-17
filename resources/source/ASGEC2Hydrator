@@ -1,0 +1,139 @@
+import json
+
+import boto3
+
+def lambda_handler(event, context):
+    print("Received event: " + json.dumps(event))
+
+    # Iterate over each record (SNS can send multiple records if batched)
+    for record in event['Records']:
+        # Each record wraps an SNS message
+        sns_message = record['Sns']
+
+        # Print SNS message details
+        print("SNS Message: ", json.dumps(sns_message))
+
+        # Access the SNS message body and parse it
+        message_body = sns_message['Message']
+        print("Message Body: ", message_body)
+
+        # Assuming the message body is a serialized JSON string
+        message_data = json.loads(message_body)
+        print("Parsed Message Data: ", message_data)
+
+        # Example of accessing a field from the JSON message
+        asg_name=''
+        if 'asg_name' in message_data:
+            asg_name = message_data['asg_name']
+            print("Value for ASG Name: ", asg_name)
+        image_id=''
+        if 'image_id' in message_data:
+            image_id = message_data['image_id']
+            print("Value for Image : ", image_id)
+        
+    create_new_instances(asg_name,image_id)
+
+def create_new_instances(asg_name , image_id):
+    # Initialize the EC2 client
+    ec2 = boto3.client('ec2')
+    
+    new_ami_id = image_id
+    print("new AMI id: ", new_ami_id)
+    
+    #update the EC2Template with new AMI ID
+    launch_template_id , launch_template_version = get_launch_template_id_from_asg(asg_name)
+    instance_type = get_instance_type_from_launch_template(launch_template_id)
+    new_version = update_launch_template_ami(launch_template_id, new_ami_id,instance_type)
+    update_autoscaling_group_to_new_template_version(asg_name, launch_template_id, new_version)
+    
+    asg_client = boto3.client('autoscaling')
+    # Step 5: Optional - Perform an instance refresh
+    asg_client.start_instance_refresh(
+        AutoScalingGroupName=asg_name,
+        Strategy='Rolling',
+        Preferences={
+            'MinHealthyPercentage': 90,
+            'InstanceWarmup': 300
+        }
+    )
+
+
+def update_launch_template_ami(launch_template_id, new_ami_id, instance_type):
+    ec2_client = boto3.client('ec2', region_name='us-east-1')
+    # Create a new version of the launch template with the new AMI
+    response = ec2_client.create_launch_template_version(
+        LaunchTemplateId=launch_template_id,
+        VersionDescription='Updated with new AMI',
+        LaunchTemplateData={
+            'ImageId': new_ami_id,
+            'InstanceType' : instance_type
+        }
+    )
+    new_version_number = response['LaunchTemplateVersion']['VersionNumber']
+    print(f"Created new launch template version: {new_version_number}")
+    return new_version_number
+
+def update_autoscaling_group_to_new_template_version(autoscaling_group_name, launch_template_id, version_number):
+    autoscaling_client = boto3.client('autoscaling', region_name='us-east-1')  # Specify the correct region
+    # Update the Auto Scaling group to use the new version of the launch template
+    response = autoscaling_client.update_auto_scaling_group(
+        AutoScalingGroupName=autoscaling_group_name,
+        LaunchTemplate={
+            'LaunchTemplateId': launch_template_id,
+            'Version': str(version_number)
+        }
+    )
+    print(f"Auto Scaling Group '{autoscaling_group_name}' updated to use launch template version {version_number}")
+
+def get_launch_template_id_from_asg(asg_name):
+    client = boto3.client('autoscaling', region_name='us-east-1')  # Specify the correct region
+    # Fetch details of the specified Auto Scaling Group
+    response = client.describe_auto_scaling_groups(AutoScalingGroupNames=[asg_name])
+    
+    # Extract the launch template information
+    asg_details = response['AutoScalingGroups'][0]  # Assuming the ASG exists and is unique
+    launch_template = asg_details.get('LaunchTemplate')
+    
+    if launch_template:
+        launch_template_id = launch_template['LaunchTemplateId']
+        launch_template_version = launch_template['Version']
+        print(f"Launch Template ID: {launch_template_id}")
+        print(f"Launch Template Version: {launch_template_version}")
+        return launch_template_id, launch_template_version
+    else:
+        print("No launch template associated with this ASG.")
+        return None, None
+
+
+
+def get_instance_type_from_launch_template(launch_template_id, version='$Latest'):
+    # Create an EC2 client
+    ec2_client = boto3.client('ec2')
+
+    # Retrieve the specified version of the launch template
+    response = ec2_client.describe_launch_template_versions(
+        LaunchTemplateId=launch_template_id,
+        Versions=[version]
+    )
+
+    # Check if the launch template version exists
+    if response['LaunchTemplateVersions']:
+        launch_template_version = response['LaunchTemplateVersions'][0]  # Assuming the first match is the target
+
+        # Extract instance type information if available
+        if 'LaunchTemplateData' in launch_template_version:
+            launch_template_data = launch_template_version['LaunchTemplateData']
+            if 'InstanceType' in launch_template_data:
+                instance_type = launch_template_data['InstanceType']
+                print(f"Instance Type: {instance_type}")
+                return instance_type
+            else:
+                print("Instance type is not specified in this launch template version.")
+                return None
+        else:
+            print("No data available for this launch template version.")
+            return None
+    else:
+        print("Launch template version not found.")
+        return None
+
